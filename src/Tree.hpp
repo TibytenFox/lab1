@@ -29,6 +29,28 @@ public:
 		if (arity == 0) throw std::invalid_argument("Arity must be greater than 0");
 	}
 
+	~Tree() {
+		clear();
+	}
+
+	Tree(Tree&&other) noexcept 
+		: arity_(other.arity_)
+		, root_(std::move(other.root_))
+		, size_(other.size_) {
+		other.size_ = 0;
+	}
+
+	Tree& operator=(Tree&&other) noexcept {
+		if (this != &other) {
+			clear();
+			arity_ = other.arity_;
+			root_ = std::move(other.root_);
+			size_ = other.size_;
+			other.size_ = 0;
+		}
+		return *this;
+	}
+
 	Node* set_root(const T& val) {
 		std::unique_ptr<Node> new_root = std::make_unique<Node>(val, arity_);
 		if (root_) {
@@ -60,25 +82,26 @@ public:
 
 	void remove_subtree(Node* node) {
 		if (node == nullptr) return;
+		if (node == root_.get()) {
+			clear();
+			return;
+		}
 		if (node->parent) {
 			size_ -= count_subtree(node);
 			Node* parent = node->parent;
+			std::unique_ptr<Node> to_delete;
+
 			for (std::size_t i = 0; i < parent->count; ++i) {
 				if (parent->children[i].get() == node) {
-					if (i == parent->count - 1) {
-						parent->children[parent->count - 1].reset();
-						break;
-					}
+					to_delete = std::move(parent->children[i]);
 					for (std::size_t j = i; j < parent->count - 1; ++j) {
 						parent->children[j] = std::move(parent->children[j + 1]);
 					}
+					--parent->count;
 					break;
 				}
 			}
-			--parent->count;
-		} else { 
-			root_.reset(); 
-			size_ = 0;
+			destroy_subtree(std::move(to_delete));
 		}
 	}
 
@@ -96,6 +119,11 @@ public:
 
 	const Node* root() const {
 		return root_.get();
+	}
+
+	void clear() noexcept {
+		destroy_subtree(std::move(root_));
+		size_ = 0;
 	}
 private:	
 	std::size_t arity_;
@@ -119,7 +147,7 @@ private:
 		return nullptr;
 	}
 
-	std::size_t count_subtree(const Node* start_node) const {
+	static std::size_t count_subtree(const Node* start_node) {
 		if (start_node == nullptr) return 0;
 		std::size_t res = 0;
 		std::stack<const Node*> st;
@@ -135,4 +163,22 @@ private:
 		}
 		return res;
 	}
+
+	static void destroy_subtree(std::unique_ptr<Node> subroot) noexcept {
+		if (!subroot) return;
+		std::stack<std::unique_ptr<Node>> st;
+		st.push(std::move(subroot));
+
+		while (!st.empty()) {
+			std::unique_ptr<Node> curr = std::move(st.top());
+			st.pop();
+
+			for (std::size_t i = 0; i < curr->count; ++i) {
+				if (curr->children[i]) {
+					st.push(std::move(curr->children[i]));
+				}
+			}
+			// curr выйдет из области видимости, при этом children уже будут пустые, поэтому без проблем удалится
+		}
+	} 
 };
