@@ -2,6 +2,7 @@
 #include <memory>
 #include <stack>
 #include <stdexcept>
+#include <utility>
 
 
 template <class T>
@@ -103,6 +104,47 @@ public:
 			}
 			destroy_subtree(std::move(to_delete));
 		}
+	}
+
+	using ReduceFunc = T (*)(const T&, const T&);
+	T reduce(ReduceFunc f, T init) const {
+		T res = init;
+		std::stack<const Node*> st;
+		st.push(root_.get());
+
+		while (!st.empty()) {
+			const Node* curr = st.top();
+			st.pop();
+			if (!curr) continue;
+			res = f(curr->value, res);
+			for (std::size_t i = 0; i < curr->count; ++i) {
+				if (curr->children[i]) {
+					st.push(curr->children[i].get());
+				}
+			}
+		}
+		return res;
+	}
+
+	using MapFunc = T (*)(const T&);
+	Tree map(MapFunc f) const {
+		if (!root_) return Tree(arity_);
+		Tree res(f(root_->value), arity_);
+		std::stack<std::pair<const Node*, Node*>> st;
+		st.push(std::make_pair(root_.get(), res.root_.get()));
+
+		while (!st.empty()) {
+			std::pair<const Node*, Node*> curr = st.top();
+			st.pop();
+			if (!curr.first) continue;
+			for (std::size_t i = 0; i < curr.first->count; ++i) {
+				if (curr.first->children[i]) {
+					Node* child = res.add_child(curr.second, f(curr.first->children[i]->value));
+					st.push(std::make_pair(curr.first->children[i].get(), child));
+				}
+			}
+		}
+		return res;
 	}
 
 	bool empty() const {
