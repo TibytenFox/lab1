@@ -3,6 +3,7 @@
 #include <stack>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 
 template <class T>
@@ -81,6 +82,45 @@ public:
 		return find_impl<const Node>(root_.get(), val);
 	}
 
+	Node* find_by_path(const std::vector<T>& path) {
+		if (path.empty()) throw std::invalid_argument("Path cannot be empty");
+		if (!root_) return nullptr;
+		if (path[0] != root_->value) return nullptr;
+
+		return walk_path_impl<Node>(root_.get(), path, 1);
+	}
+
+	const Node* find_by_path(const std::vector<T>& path) const {
+		if (path.empty()) throw std::invalid_argument("Path cannot be empty");
+		if (!root_) return nullptr;
+		if (path[0] != root_->value) return nullptr;
+
+		return walk_path_impl<const Node>(root_.get(), path, 1);
+	}
+
+	Node* find_by_relative_path(Node* start_node, const std::vector<T>& path) {
+		return walk_path_impl<Node>(start_node, path, 0);
+	}
+
+	const Node* find_by_relative_path(const Node* start_node, const std::vector<T>& path) const  {
+		return walk_path_impl<const Node>(start_node, path, 0);
+	}
+
+	bool contains_subtree(const Tree& sub) const {
+		if (sub.empty()) return true;
+		if (empty() || size_ < sub.size_) return false;
+
+		bool found = false;
+		traverse_dfs(root_.get(), [&](const Node* curr) {
+			if (curr->value == sub.root()->value && is_same_subtree(curr, sub.root())) {
+				found = true;
+				return false; // поиск завершён
+			}
+			return true; // поиск продолжается
+		});
+		return found;
+	}
+
 	void remove_subtree(Node* node) {
 		if (node == nullptr) return;
 		if (node == root_.get()) {
@@ -109,42 +149,20 @@ public:
 	using ReduceFunc = T (*)(const T&, const T&);
 	T reduce(ReduceFunc f, T init) const {
 		T res = init;
-		std::stack<const Node*> st;
-		st.push(root_.get());
-
-		while (!st.empty()) {
-			const Node* curr = st.top();
-			st.pop();
-			if (!curr) continue;
+		traverse_dfs(root_.get(), [&](const Node* curr) {
 			res = f(curr->value, res);
-			for (std::size_t i = 0; i < curr->count; ++i) {
-				if (curr->children[i]) {
-					st.push(curr->children[i].get());
-				}
-			}
-		}
-		return res;
+			return true;
+		});
+		return res;	
 	}
 
 	using MapFunc = T (*)(const T&);
 	Tree map(MapFunc f) const {
-		if (!root_) return Tree(arity_);
-		Tree res(f(root_->value), arity_);
-		std::stack<std::pair<const Node*, Node*>> st;
-		st.push(std::make_pair(root_.get(), res.root_.get()));
+		return clone_subtree(root_.get(), arity_, f);
+	}
 
-		while (!st.empty()) {
-			std::pair<const Node*, Node*> curr = st.top();
-			st.pop();
-			if (!curr.first) continue;
-			for (std::size_t i = 0; i < curr.first->count; ++i) {
-				if (curr.first->children[i]) {
-					Node* child = res.add_child(curr.second, f(curr.first->children[i]->value));
-					st.push(std::make_pair(curr.first->children[i].get(), child));
-				}
-			}
-		}
-		return res;
+	Tree extract_subtree(const T& val) const {
+		return clone_subtree(find(val), arity_, [](const T& x) { return x; });
 	}
 
 	bool empty() const {
@@ -174,35 +192,23 @@ private:
 
 	template <class NodeType>
 	static NodeType* find_impl(NodeType* start_node, const T& val) {
-		if (start_node == nullptr) return nullptr;
-		std::stack<NodeType*> st;
-		st.push(start_node);
-		while (!st.empty()) {
-			NodeType* curr = st.top();
-			st.pop();
-			if (!curr) continue;
-			if (curr->value == val) return curr;
-			for (std::size_t i = curr->count; i > 0; --i) {
-				st.push(curr->children[i - 1].get());
+		NodeType* found = nullptr;
+		traverse_dfs(start_node, [&](NodeType* curr) {
+			if (curr->value == val) {
+				found = curr;
+				return false; // нашли - останавливаем обход
 			}
-		}
-		return nullptr;
+			return true;
+		});
+		return found;
 	}
 
 	static std::size_t count_subtree(const Node* start_node) {
-		if (start_node == nullptr) return 0;
 		std::size_t res = 0;
-		std::stack<const Node*> st;
-		st.push(start_node);
-		while (!st.empty()) {
-			const Node* curr = st.top();
-			st.pop();
-			if (!curr) continue;
+		traverse_dfs(start_node, [&](const Node*) {
 			++res;
-			for (std::size_t i = curr->count; i > 0; --i) {
-				st.push(curr->children[i - 1].get());
-			}
-		}
+			return true;
+		});
 		return res;
 	}
 
@@ -223,4 +229,89 @@ private:
 			// curr выйдет из области видимости, при этом children уже будут пустые, поэтому без проблем удалится
 		}
 	} 
+
+	template <class Func>
+	static Tree clone_subtree(const Node* start_node, std::size_t arity, Func transform) {
+		if (!start_node) return Tree(arity);
+		Tree res(transform(start_node->value), arity);
+
+		std::stack<std::pair<const Node*, Node*>> st;
+		st.push({start_node, res.root_.get()});
+
+		while (!st.empty()) {
+			auto [src, dst] = st.top();
+			st.pop();
+			for (std::size_t i = 0; i < src->count; ++i) {
+				if (src->children[i]) {
+					Node* child = res.add_child(dst, transform(src->children[i]->value));
+					st.push({src->children[i].get(), child});
+				}
+			}
+		}
+		return res;
+	}
+
+	template <class NodeType, class Func>
+	static void traverse_dfs(NodeType* start_node, Func visitor) {
+		if (!start_node) return;
+		std::stack<NodeType*> st;
+		st.push(start_node);
+
+		while (!st.empty()) {
+			NodeType* curr = st.top();
+			st.pop();
+			if (!curr) continue;
+			if (!visitor(curr)) return; // досрочный выход (для find / contains_subtree)
+
+			for (std::size_t i = curr->count; i > 0; --i) {
+				if (curr->children[i - 1]) {
+					st.push(curr->children[i - 1].get());
+				}
+			}
+		}
+	}
+
+	static bool is_same_subtree(const Node* a, const Node* b) {
+		std::stack<std::pair<const Node*, const Node*>> st;
+		st.push({a, b});
+
+		while (!st.empty()) {
+			auto [curr_a, curr_b] = st.top();
+			st.pop();
+
+			if (!curr_a && !curr_b) continue;
+			if (!curr_a || !curr_b) return false;
+			if (curr_a->value != curr_b->value || curr_a->count != curr_b->count) {
+				return false;
+			}
+
+			for (std::size_t i = 0; i < curr_a->count; ++i) {
+				st.push({curr_a->children[i].get(), curr_b->children[i].get()});
+			}
+		}
+		return true;
+	}
+
+	template <class NodeType>
+	static NodeType* walk_path_impl(NodeType* start_node, const std::vector<T>& path, std::size_t start_index) {
+		if (path.empty()) throw std::invalid_argument("Path cannot be empty");
+		if (start_node == nullptr) throw std::invalid_argument("Start node cannot be null");
+
+		bool found;
+		NodeType* curr = start_node;
+		for (std::size_t i = start_index; i < path.size(); ++i) {
+			found = false;
+			for (std::size_t j = 0; j < curr->count; ++j) {
+				if (curr->children[j]) {
+					if (path[i] == curr->children[j]->value) {
+						found = true;
+						curr = curr->children[j].get();
+						break;
+					}
+				}
+			}
+			if (!found) return nullptr;
+		}
+		return curr;
+	}
 };
