@@ -1,4 +1,5 @@
 #pragma once
+#include <iostream>
 #include <memory>
 #include <stack>
 #include <stdexcept>
@@ -154,6 +155,66 @@ public:
 			return true;
 		});
 		return res;	
+	}
+
+	void save_fixed(std::ostream& out) const {
+		if (!root_) return;
+		bool first = true;
+
+		traverse_dfs(root_.get(), [&](const Node* curr) {
+			if (!first) out << ' ';
+			first = false;
+			out << curr->value << ' ' << curr->count;
+			return true;
+		});
+	}
+
+	static Tree load_fixed(std::istream& in, std::size_t arity) {
+		Tree res(arity);
+		T val{};
+		std::size_t cnt = 0;
+
+		if (!(in >> val)) {
+			return res;
+		}
+		if (!(in >> cnt) || cnt > arity) {
+			throw std::invalid_argument("Invalid root children count in stream");
+		}
+
+		res.set_root(val);
+		std::stack<std::pair<Node*, std::size_t>> st;
+		if (cnt > 0) {
+			st.push(std::make_pair(res.root(), cnt));
+		}
+
+		while (in >> val) {
+			if (st.empty()) {
+				throw std::invalid_argument("Extra nodes in input stream");
+			}
+			if (!(in >> cnt) || cnt > arity) {
+				throw std::invalid_argument("Invalid children count in input stream");
+			}
+
+			Node* parent = st.top().first;
+			Node* child = res.add_child(parent, val);
+			--st.top().second;
+
+			if (st.top().second == 0) {
+				st.pop();
+			}
+			if (cnt > 0) {
+				st.push(std::make_pair(child, cnt));
+			}
+		}
+
+		if (!in.eof()) {
+			throw std::invalid_argument("Invalid children count in input stream");
+		}
+		if (!st.empty()) {
+			throw std::invalid_argument("Unexpected end of input stream");
+		}
+
+		return res;
 	}
 
 	using MapFunc = T (*)(const T&);
